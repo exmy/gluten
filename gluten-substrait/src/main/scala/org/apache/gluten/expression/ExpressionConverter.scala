@@ -336,10 +336,16 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           replaceWithExpressionTransformer0(m.child, attributeSeq, expressionsMap),
           m)
       case m: MapFromEntries =>
+        val mapKeyDedupPolicy = SQLConf.get.getConf(SQLConf.MAP_KEY_DEDUP_POLICY)
         BackendsApiManager.getSparkPlanExecApiInstance.genMapFromEntriesTransformer(
-          substraitExprName,
+          if (mapKeyDedupPolicy.toString == SQLConf.MapKeyDedupPolicy.LAST_WIN.toString) {
+            ExpressionNames.MAP_FROM_ENTRIES_LAST_WIN
+          } else {
+            substraitExprName
+          },
           replaceWithExpressionTransformer0(m.child, attributeSeq, expressionsMap),
-          m)
+          m
+        )
       case e: Explode =>
         ExplodeTransformer(
           substraitExprName,

@@ -403,6 +403,13 @@ class CHSparkPlanExecApi extends SparkPlanExecApi with Logging {
       original: GetMapValue): ExpressionTransformer =
     GetMapValueTransformer(substraitExprName, left, right, failOnError = false, original)
 
+  /** Transform map_from_entries to Substrait. */
+  override def genMapFromEntriesTransformer(
+      substraitExprName: String,
+      child: ExpressionTransformer,
+      expr: Expression): ExpressionTransformer =
+    GenericExpressionTransformer(substraitExprName, Seq(child), expr)
+
   /**
    * Generate ShuffleDependency for ColumnarShuffleExchangeExec.
    *

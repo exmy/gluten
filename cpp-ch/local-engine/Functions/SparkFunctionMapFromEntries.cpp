@@ -23,6 +23,7 @@
 #include <Columns/ColumnsNumber.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeMap.h>
+#include <DataTypes/DataTypeNothing.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeTuple.h>
 #include <Functions/FunctionFactory.h>
@@ -69,7 +70,18 @@ public:
                 arguments[0]->getName());
 
         const auto & entry_type = array_type->getNestedType();
-        const auto * tuple_type = checkAndGetDataType<DataTypeTuple>(removeNullable(entry_type).get());
+        const auto entry_type_without_nullable = removeNullable(entry_type);
+        if (isNothing(entry_type_without_nullable))
+        {
+            auto map_type = std::make_shared<DataTypeMap>(
+                std::make_shared<DataTypeNothing>(),
+                std::make_shared<DataTypeNothing>());
+            if (arguments[0]->isNullable() || entry_type->isNullable())
+                return makeNullable(map_type);
+            return map_type;
+        }
+
+        const auto * tuple_type = checkAndGetDataType<DataTypeTuple>(entry_type_without_nullable.get());
         if (!tuple_type || tuple_type->getElements().size() != 2)
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
@@ -84,7 +96,10 @@ public:
         return map_type;
     }
 
-    ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type, size_t input_rows_count) const override
+    ColumnPtr executeImpl(
+        const ColumnsWithTypeAndName & arguments,
+        const DataTypePtr & result_type,
+        size_t input_rows_count) const override
     {
         ColumnPtr holder = arguments[0].column->convertToFullColumnIfConst();
 
@@ -112,6 +127,55 @@ public:
             entries_data = &nullable_entries->getNestedColumn();
         }
 
+        const auto & result_map_type = assert_cast<const DataTypeMap &>(*removeNullable(result_type));
+        if (isNothing(entries_data->getDataType()))
+        {
+            auto result_key_column = result_map_type.getKeyType()->createColumn();
+            auto result_value_column = result_map_type.getValueType()->createColumn();
+            auto result_offsets_column = ColumnArray::ColumnOffsets::create(input_rows_count, 0);
+
+            ColumnUInt8::MutablePtr result_null_map;
+            PaddedPODArray<UInt8> * result_null_map_data = nullptr;
+            if (result_type->isNullable())
+            {
+                result_null_map = ColumnUInt8::create(input_rows_count, 0);
+                result_null_map_data = &result_null_map->getData();
+            }
+
+            size_t previous_entry_offset = 0;
+            for (size_t row = 0; row < input_rows_count; ++row)
+            {
+                const auto current_entry_offset = entries_offsets[row];
+                if (input_null_map && (*input_null_map)[row])
+                {
+                    if (result_null_map_data)
+                        (*result_null_map_data)[row] = 1;
+                }
+                else if (entry_null_map)
+                {
+                    for (size_t entry = previous_entry_offset; entry < current_entry_offset; ++entry)
+                    {
+                        if ((*entry_null_map)[entry])
+                        {
+                            if (result_null_map_data)
+                                (*result_null_map_data)[row] = 1;
+                            break;
+                        }
+                    }
+                }
+                previous_entry_offset = current_entry_offset;
+            }
+
+            auto nested_column = ColumnArray::create(
+                ColumnTuple::create(
+                    Columns{std::move(result_key_column), std::move(result_value_column)}),
+                std::move(result_offsets_column));
+            auto result_column = ColumnMap::create(std::move(nested_column));
+            if (result_type->isNullable())
+                return ColumnNullable::create(std::move(result_column), std::move(result_null_map));
+            return result_column;
+        }
+
         const auto * entries_tuple = checkAndGetColumn<ColumnTuple>(entries_data);
         if (!entries_tuple || entries_tuple->tupleSize() != 2)
             throw Exception(
@@ -133,7 +197,6 @@ public:
             key_insert_column = key_insert_holder.get();
         }
 
-        const auto & result_map_type = assert_cast<const DataTypeMap &>(*removeNullable(result_type));
         auto result_key_column = result_map_type.getKeyType()->createColumn();
         auto result_value_column = result_map_type.getValueType()->createColumn();
         auto result_offsets_column = ColumnArray::ColumnOffsets::create();
@@ -203,7 +266,10 @@ public:
                             selected_entry.second = entry;
                             break;
                         }
-                        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Duplicate map key is found in function {}", getName());
+                        throw Exception(
+                            ErrorCodes::BAD_ARGUMENTS,
+                            "Duplicate map key is found in function {}",
+                            getName());
                     }
                 }
 
@@ -223,7 +289,8 @@ public:
         }
 
         auto nested_column = ColumnArray::create(
-            ColumnTuple::create(Columns{std::move(result_key_column), std::move(result_value_column)}), std::move(result_offsets_column));
+            ColumnTuple::create(Columns{std::move(result_key_column), std::move(result_value_column)}),
+            std::move(result_offsets_column));
         auto result_column = ColumnMap::create(std::move(nested_column));
         if (result_type->isNullable())
             return ColumnNullable::create(std::move(result_column), std::move(result_null_map));

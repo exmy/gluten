@@ -1094,8 +1094,9 @@ class GlutenFunctionValidateSuite extends GlutenClickHouseWholeStageTransformerS
           |) order by id
           |""".stripMargin
       runQueryAndCompare(query)(checkGlutenPlan[ProjectExecTransformer])
-      runQueryAndCompare("select map_from_entries(array()) from range(1)")(
-        checkGlutenPlan[ProjectExecTransformer])
+      runQueryAndCompare(
+        "select map_from_entries(cast(array() as array<struct<key:int,value:string>>)) " +
+          "from range(1)")(checkGlutenPlan[ProjectExecTransformer])
 
       intercept[SparkException] {
         sql(

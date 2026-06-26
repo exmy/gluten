@@ -146,23 +146,21 @@ public:
             for (size_t row = 0; row < input_rows_count; ++row)
             {
                 const auto current_entry_offset = entries_offsets[row];
-                if (input_null_map && (*input_null_map)[row])
-                {
-                    if (result_null_map_data)
-                        (*result_null_map_data)[row] = 1;
-                }
-                else if (entry_null_map)
+                const bool input_map_null = input_null_map && (*input_null_map)[row];
+                bool entry_map_null = false;
+                if (!input_map_null && entry_null_map)
                 {
                     for (size_t entry = previous_entry_offset; entry < current_entry_offset; ++entry)
                     {
                         if ((*entry_null_map)[entry])
                         {
-                            if (result_null_map_data)
-                                (*result_null_map_data)[row] = 1;
+                            entry_map_null = true;
                             break;
                         }
                     }
                 }
+                if (result_null_map_data)
+                    (*result_null_map_data)[row] = input_map_null || entry_map_null;
                 previous_entry_offset = current_entry_offset;
             }
 

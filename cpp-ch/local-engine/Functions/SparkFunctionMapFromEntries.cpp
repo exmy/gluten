@@ -29,8 +29,10 @@
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionHelpers.h>
 #include <Functions/IFunction.h>
+#include <Common/SipHash.h>
 #include <Common/assert_cast.h>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace DB
@@ -217,70 +219,27 @@ public:
 
             if (input_null_map && (*input_null_map)[row])
             {
-                if (result_null_map_data)
-                    (*result_null_map_data)[row] = 1;
-                result_offsets.push_back(result_offset);
+                appendNullMap(result_null_map_data, row, result_offsets, result_offset);
                 previous_entry_offset = current_entry_offset;
                 continue;
             }
 
-            bool has_null_entry = false;
-            if (entry_null_map)
+            if (hasNullEntry(entry_null_map, previous_entry_offset, current_entry_offset))
             {
-                for (size_t entry = previous_entry_offset; entry < current_entry_offset; ++entry)
-                {
-                    if ((*entry_null_map)[entry])
-                    {
-                        has_null_entry = true;
-                        break;
-                    }
-                }
-            }
-
-            if (has_null_entry)
-            {
-                if (result_null_map_data)
-                    (*result_null_map_data)[row] = 1;
-                result_offsets.push_back(result_offset);
+                appendNullMap(result_null_map_data, row, result_offsets, result_offset);
                 previous_entry_offset = current_entry_offset;
                 continue;
             }
 
-            std::vector<std::pair<size_t, size_t>> selected_entries;
-            selected_entries.reserve(current_entry_offset - previous_entry_offset);
-            for (size_t entry = previous_entry_offset; entry < current_entry_offset; ++entry)
-            {
-                if (key_column.isNullAt(entry))
-                    throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot use NULL as map key in function {}", getName());
-
-                bool has_duplicate_key = false;
-                for (auto & selected_entry : selected_entries)
-                {
-                    if (key_column.compareAt(entry, selected_entry.first, key_column, 1) == 0)
-                    {
-                        has_duplicate_key = true;
-                        if constexpr (last_win)
-                        {
-                            selected_entry.second = entry;
-                            break;
-                        }
-                        throw Exception(
-                            ErrorCodes::BAD_ARGUMENTS,
-                            "Duplicate map key is found in function {}",
-                            getName());
-                    }
-                }
-
-                if (!has_duplicate_key)
-                    selected_entries.emplace_back(entry, entry);
-            }
-
-            for (const auto selected_entry : selected_entries)
-            {
-                result_key_column->insertFrom(*key_insert_column, selected_entry.first);
-                result_value_column->insertFrom(value_column, selected_entry.second);
-                ++result_offset;
-            }
+            auto selected_entries =
+                selectEntriesForRow(key_column, previous_entry_offset, current_entry_offset);
+            appendSelectedEntries(
+                selected_entries,
+                *key_insert_column,
+                value_column,
+                *result_key_column,
+                *result_value_column,
+                result_offset);
 
             result_offsets.push_back(result_offset);
             previous_entry_offset = current_entry_offset;
@@ -293,6 +252,149 @@ public:
         if (result_type->isNullable())
             return ColumnNullable::create(std::move(result_column), std::move(result_null_map));
         return result_column;
+    }
+
+private:
+    struct UInt128Hash
+    {
+        size_t operator()(const UInt128 & value) const
+        {
+            return std::hash<UInt64>{}(value.items[0])
+                ^ (std::hash<UInt64>{}(value.items[1]) << 1);
+        }
+    };
+
+    using SelectedEntry = std::pair<size_t, size_t>;
+    using SelectedEntries = std::vector<SelectedEntry>;
+
+    static bool hasNullEntry(
+        const PaddedPODArray<UInt8> * entry_null_map,
+        size_t previous_entry_offset,
+        size_t current_entry_offset)
+    {
+        if (!entry_null_map)
+            return false;
+
+        for (size_t entry = previous_entry_offset; entry < current_entry_offset; ++entry)
+        {
+            if ((*entry_null_map)[entry])
+                return true;
+        }
+        return false;
+    }
+
+    static void appendNullMap(
+        PaddedPODArray<UInt8> * result_null_map_data,
+        size_t row,
+        ColumnArray::Offsets & result_offsets,
+        size_t result_offset)
+    {
+        if (result_null_map_data)
+            (*result_null_map_data)[row] = 1;
+        result_offsets.push_back(result_offset);
+    }
+
+    static SelectedEntries selectEntriesForRow(
+        const IColumn & key_column,
+        size_t previous_entry_offset,
+        size_t current_entry_offset)
+    {
+        SelectedEntries selected_entries;
+        selected_entries.reserve(current_entry_offset - previous_entry_offset);
+
+        std::unordered_map<UInt128, size_t, UInt128Hash> first_selected_index_by_hash;
+        first_selected_index_by_hash.reserve(current_entry_offset - previous_entry_offset);
+        std::unordered_map<UInt128, std::vector<size_t>, UInt128Hash>
+            collision_selected_indices_by_hash;
+
+        for (size_t entry = previous_entry_offset; entry < current_entry_offset; ++entry)
+        {
+            if (key_column.isNullAt(entry))
+                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot use NULL as map key in function {}", name);
+
+            SipHash hash_function;
+            key_column.updateHashWithValue(entry, hash_function);
+            const UInt128 hash = hash_function.get128();
+
+            bool has_duplicate_key = false;
+            size_t duplicate_selected_index = 0;
+            const auto first_selected_index_it = first_selected_index_by_hash.find(hash);
+            if (first_selected_index_it != first_selected_index_by_hash.end())
+            {
+                const auto first_selected_index = first_selected_index_it->second;
+                if (key_column.compareAt(
+                        entry,
+                        selected_entries[first_selected_index].first,
+                        key_column,
+                        1) == 0)
+                {
+                    has_duplicate_key = true;
+                    duplicate_selected_index = first_selected_index;
+                }
+                else
+                {
+                    const auto collision_selected_indices_it =
+                        collision_selected_indices_by_hash.find(hash);
+                    if (collision_selected_indices_it != collision_selected_indices_by_hash.end())
+                    {
+                        for (const auto selected_index : collision_selected_indices_it->second)
+                        {
+                            if (key_column.compareAt(
+                                    entry,
+                                    selected_entries[selected_index].first,
+                                    key_column,
+                                    1) == 0)
+                            {
+                                has_duplicate_key = true;
+                                duplicate_selected_index = selected_index;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (has_duplicate_key)
+            {
+                if constexpr (last_win)
+                {
+                    selected_entries[duplicate_selected_index].second = entry;
+                    continue;
+                }
+                throw Exception(
+                    ErrorCodes::BAD_ARGUMENTS,
+                    "Duplicate map key is found in function {}",
+                    name);
+            }
+
+            if (first_selected_index_it == first_selected_index_by_hash.end())
+            {
+                first_selected_index_by_hash.emplace(hash, selected_entries.size());
+            }
+            else
+            {
+                collision_selected_indices_by_hash[hash].push_back(selected_entries.size());
+            }
+            selected_entries.emplace_back(entry, entry);
+        }
+
+        return selected_entries;
+    }
+
+    static void appendSelectedEntries(
+        const SelectedEntries & selected_entries,
+        const IColumn & key_insert_column,
+        const IColumn & value_column,
+        IColumn & result_key_column,
+        IColumn & result_value_column,
+        size_t & result_offset)
+    {
+        for (const auto & selected_entry : selected_entries)
+        {
+            result_key_column.insertFrom(key_insert_column, selected_entry.first);
+            result_value_column.insertFrom(value_column, selected_entry.second);
+            ++result_offset;
+        }
     }
 };
 

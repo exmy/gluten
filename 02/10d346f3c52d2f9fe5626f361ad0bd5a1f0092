@@ -1,0 +1,20 @@
+backends-clickhouse/src/test/scala/org/apache/gluten/execution/GlutenFunctionValidateSuite.scala
+  s_7df7dc2de9f418::t_b2399d4346464d 872-911
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0210d346f3c52d2f9fe5626f361ad0bd5a1f0092",
+  "prompts": {},
+  "logical_commit_id": "f741ce3edccfdfd813c7c8f98809b4b8b0abea95",
+  "sessions": {
+    "s_7df7dc2de9f418": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0be2f-c217-7600-96a2-cee4bfb3b5cf",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "exmy <xumovens@gmail.com>"
+    }
+  }
+}

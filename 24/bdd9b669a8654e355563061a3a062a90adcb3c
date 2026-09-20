@@ -1,0 +1,17 @@
+backends-clickhouse/src/test/scala/org/apache/gluten/execution/GlutenFunctionValidateSuite.scala
+  h_1e39da27f88969 561-568
+cpp-ch/local-engine/Parser/scalar_function_parser/arrayHighOrderFunctions.cpp
+  h_1e39da27f88969 58,61-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "24bdd9b669a8654e355563061a3a062a90adcb3c",
+  "prompts": {},
+  "logical_commit_id": "24bdd9b669a8654e355563061a3a062a90adcb3c",
+  "humans": {
+    "h_1e39da27f88969": {
+      "author": "exmy <xumovens@gmail.com>"
+    }
+  }
+}

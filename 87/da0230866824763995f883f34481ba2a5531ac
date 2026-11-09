@@ -1,0 +1,17 @@
+backends-clickhouse/src/test/scala/org/apache/gluten/execution/compatibility/GlutenClickhouseStringFunctionsSuite.scala
+  h_1e39da27f88969 110-129
+cpp-ch/local-engine/Parser/scalar_function_parser/regexp_extract.cpp
+  h_1e39da27f88969 114-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "87da0230866824763995f883f34481ba2a5531ac",
+  "prompts": {},
+  "logical_commit_id": "87da0230866824763995f883f34481ba2a5531ac",
+  "humans": {
+    "h_1e39da27f88969": {
+      "author": "exmy <xumovens@gmail.com>"
+    }
+  }
+}
